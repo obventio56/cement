@@ -1,61 +1,72 @@
 import tweepy, langdetect
 import json, datetime, re, os
+import csv
 from pprint import pprint
 
 keywords = {
-    "GOOG": {"include": ['google', 'youtube', 'Sundar Pichai', 'android', 'gmail'],
-             "exclude": [""]},
-    "APPL": {"include": ['apple', 'airpods', 'iphone', 'macbook', 'apple music', 'tim cook'],
+    "GOOG": {"include": ['google', 'youtube', 'Sundar Pichai', 'android', 'gmail', 'goog'],
+             "exclude": ['I liked a @YouTube video', 'via @YouTube', 'I added a video to a @YouTube playlist']},
+    "APPL": {"include": ['apple', 'airpods', 'iphone', 'macbook', 'apple music', 'tim cook', 'appl'],
              "exclude": ['delicious', 'pie', 'tart', 'food', 'bottom jean', 'cranberry', 'tree',
-                         'cinnamon', 'vinega', ' - ', 'cide', ]},
-    "TSLA": {"include": ['elon musk', 'tesla', 'model 3', 'model s', 'model x', 'supercharge', 'gigafactory'],
+                         'cinnamon', 'vinegar', ' - ', 'cider', ]},
+    "TSLA": {"include": ['elon musk', 'tesla', 'model 3', 'model s', 'model x', 'supercharge', 'gigafactory', 'tsla'],
              "exclude": ['coil', 'nikola']},
-    "NFLX": {"include": ['netflix', 'stranger things'],
+    "NFLX": {"include": ['netflix', 'stranger things', 'nflx'],
              "exclude": []},
-    "SNAP": {"include": ['snapchat'],
-             "exclude": ["add me", "horny"]},
+    "SNAP": {"include": ['snapchat', 'evan spiegel', 'snapchat map', 'snap', 'snap map'],
+             "exclude": ["add me", "horny", "oh snap"]},
     # 90% of snapchat posts are chicks posting selfies, so I think volume is more important than sentiment for $SNAP
-    "FB": {"include": ['facebook'],
-           "exclude": []},
-    "SBUX": {"include": ['starbucks'],
+    "FB": {"include": ['facebook', 'fb', 'instagram', 'sheryl sanberg', 'zuckerberg'],
+           "exclude": ['I posted a new video to Facebook']},
+    "SBUX": {"include": ['starbucks', 'sbux', 'howard schultz', 'pumpkin spice latte'],
              "exclude": []},
-    "AMZN": {"include": ['amazon'],
+    "AMZN": {"include": ['amazon', 'amzn', 'jeff bezos', 'prime video'],
              "exclude": []},
-    "TRIP": {"include": ['tripadvisor'],
-             "exclude": []},
-    "CMG": {"include": ['chipotle'],
+    "CMG": {"include": ['chipotle', 'cmg', 'Brian Niccol'],
             "exclude": []},
-    "AMD": {"include": ['AMD'],
+    "AMD": {"include": ['AMD', 'Lisa Su', 'advanced micro devices', 'ryzen'],
             "exclude": []},
     "WEED": {"include": ['$WEED', '$TLRY', '$ALEF', '$APHA'],
              # I cant just follow weed, so I'm using this as sort of an index fund for all weed stocks
              "exclude": []}
 }
 
-universal_exclude = ['for sale']
+universal_exclude = ['dasfdsfasdfa']
 
 # compile regexes in keywords and get list of all keywords
 all_search_terms = []
 for _, stock in keywords.items():
     stock["exclude"] += universal_exclude
-    stock["include_regex"] = re.compile("|".join(stock["include"]), flags=re.MULTILINE | re.IGNORECASE)
-    stock["exclude_regex"] = re.compile("|".join(stock["exclude"]), flags=re.MULTILINE | re.IGNORECASE)
+    stock["include_regex"] = re.compile("(" + "|".join(stock["include"]) + ")", flags=re.MULTILINE | re.IGNORECASE)
+    stock["exclude_regex"] = re.compile("(" + "|".join(stock["exclude"]) + ")", flags=re.MULTILINE | re.IGNORECASE)
     all_search_terms += stock["include"]
+    pprint("(" + "|".join(stock["include"]) + ")")
 
 
-def save_tweet(symbol, tweet):
+def save_tweet(symbol, tweet, include_words):
     """appends tweet to a daily file for it's symbol"""
-    symbol = "data/" + symbol
+    symbol_file = "data/" + symbol
     date_today = datetime.date.today().strftime("%m-%d-%Y")
-    if not os.path.exists(symbol):
-        os.makedirs(symbol)
+    if not os.path.exists(symbol_file):
+        os.makedirs(symbol_file)
 
-    filename = symbol + "/" + date_today + '.txt'
+    filename = symbol_file + "/" + date_today + '.csv'
     write_method = 'a' if os.path.exists(filename) else 'w'
 
-    highscore = open(filename, write_method)
-    highscore.write(tweet + '\r\n')  # use windows style line endings since tweets can contain \n
-    highscore.close()
+    matched_keywords = set([word.lower() for word in include_words])
+    
+    tweet_content = tweet['text']
+    
+    if 'extended_tweet' in tweet.keys():
+        tweet_content = tweet['extended_tweet']['full_text']
+    
+    with open(filename,write_method) as fd:
+        file_writer = csv.writer(fd)
+        pprint([date_today, symbol, tweet_content, tweet['user']['followers_count'], tweet['created_at'], matched_keywords])
+        file_writer.writerow([date_today, symbol, tweet_content, tweet['user']['followers_count'], tweet['created_at'], matched_keywords])    
+    fd.close()
+		
+#def save_tweet_in_db(symbol, tweet)
 
 
 def is_spam(status):
@@ -65,6 +76,8 @@ def is_spam(status):
             or status.author.lang != 'en'  # we can only process english
             or abs(status.author.created_at - datetime.datetime.now()).days < 120  # new user accounts are commonly spam
             or status.retweeted or 'RT @' in status.text  # we don't care about retweets since they were already counted
+            or status.in_reply_to_status_id != None
+            or status.is_quote_status == True
     ):
         return True
 
@@ -75,21 +88,24 @@ def is_spam(status):
             return True
         else:
             return False
+        
     except langdetect.lang_detect_exception.LangDetectException:
         return True
-
 
 class FilteredStreamListener(tweepy.StreamListener):
 
     def on_status(self, status):
         if not is_spam(status):
-            tweet_sans_urls = re.sub(r'^https?:\/\/.*[\r\n]*', '', status.text, flags=re.MULTILINE)
+            tweet_sans_urls = re.sub(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', '', status.text, flags=re.MULTILINE)
 
             for symbol, regexes in keywords.items():
-                if regexes["include_regex"].match(tweet_sans_urls) and not regexes["exclude_regex"].match(
-                        tweet_sans_urls):
-                    save_tweet(symbol, json.dumps(status._json))
-                    print(status.text)
+                include_words = regexes["include_regex"].findall(tweet_sans_urls)
+                exclude_words = regexes["exclude_regex"].findall(tweet_sans_urls)
+                
+                if len(include_words) > 0 and len(exclude_words) == 0:
+                    pprint(exclude_words)
+                    pprint(include_words)
+                    save_tweet(symbol, status._json, include_words)
                     print("")
 
     def on_error(self, status_code):
