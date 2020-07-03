@@ -3,11 +3,12 @@ import sqlite3
 import json, datetime, re, os
 import csv
 from pprint import pprint
+from textblob import TextBlob 
 
 db = sqlite3.connect('tweets.db')
 
 db.execute('''CREATE TABLE IF NOT EXISTS tweets
-             (ID INTEGER PRIMARY KEY, symbol text, tweet_content blob, follower_count integer, matched_keywords blob, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)''')
+             (ID INTEGER PRIMARY KEY, symbol text, sentiment real, tweet_content blob, follower_count integer, matched_keywords blob, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)''')
 
 db.commit()
 
@@ -23,7 +24,6 @@ keywords = {
              "exclude": []},
     "SNAP": {"include": ['snapchat', 'evan spiegel', 'snapchat map', 'snap', 'snap map'],
              "exclude": ["add me", "horny", "oh snap"]},
-    # 90% of snapchat posts are chicks posting selfies, so I think volume is more important than sentiment for $SNAP
     "FB": {"include": ['facebook', 'fb', 'instagram', 'sheryl sanberg', 'zuckerberg'],
            "exclude": ['I posted a new video to Facebook']},
     "SBUX": {"include": ['starbucks', 'sbux', 'howard schultz', 'pumpkin spice latte'],
@@ -35,7 +35,6 @@ keywords = {
     "AMD": {"include": ['AMD', 'Lisa Su', 'advanced micro devices', 'ryzen'],
             "exclude": []},
     "WEED": {"include": ['$WEED', '$TLRY', '$ALEF', '$APHA'],
-             # I cant just follow weed, so I'm using this as sort of an index fund for all weed stocks
              "exclude": []}
 }
 
@@ -74,6 +73,11 @@ def save_tweet(symbol, tweet, include_words):
         file_writer.writerow([date_today, symbol, tweet_content, tweet['user']['followers_count'], tweet['created_at'], matched_keywords])    
     fd.close()
 
+def get_sentiment(tweet_content):
+    clean_tweet = ' '.join(re.sub("(@[A-Za-z0-9]+)|([^0-9A-Za-z \t])|(\w+:\/\/\S+)", " ", tweet_content).split()) 
+    analysis = TextBlob(clean_tweet)
+    return analysis.sentiment.polarity
+
 def save_tweet_in_db(symbol, tweet, include_words):
     """appends tweet to a daily file for it's symbol"""
     symbol_file = "data/" + symbol
@@ -91,8 +95,8 @@ def save_tweet_in_db(symbol, tweet, include_words):
     if 'extended_tweet' in tweet.keys():
         tweet_content = tweet['extended_tweet']['full_text']
     
-    tweet_props = (json.dumps(symbol) , json.dumps(tweet_content), str(tweet['user']['followers_count']), json.dumps(",".join(matched_keywords)))
-    db.execute("INSERT INTO tweets(symbol, tweet_content, follower_count, matched_keywords) values (?,?,?,?)", tweet_props)
+    tweet_props = (symbol, get_sentiment(tweet_content), json.dumps(tweet_content), str(tweet['user']['followers_count']), json.dumps(",".join(matched_keywords)))
+    db.execute("INSERT INTO tweets(symbol, sentiment, tweet_content, follower_count, matched_keywords) values (?,?,?,?,?)", tweet_props)
     db.commit()
 
 
